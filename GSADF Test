@@ -1,0 +1,122 @@
+# Referneces for this calculation is
+# https://cran.r-project.org/web/packages/exuber/exuber.pdf
+
+
+#Installing required libraries.
+#install.packages("exuber")
+#install.packages("xts")
+#install.packages("vars")
+
+# Load required libraries
+library(exuber) # For RADF test
+library(xts) # For time series
+library(vars) # For VARselect
+
+# Load and clean data
+stock_prices <- read.csv("stock_prices.csv")
+colnames(stock_prices)[1] <- "Date" 
+stock_prices$Date <- as.Date(stock_prices$Date, format = "%Y-%m-%d")
+stock_prices_ts <- xts(stock_prices[, -1], order.by = as.Date(stock_prices$Date))
+colnames(stock_prices_ts) <- colnames(stock_prices)[-1]
+stock_prices_ts <- as.matrix(stock_prices_ts)
+
+
+
+# Determine minimum window size and minimum duration
+sample_size <- nrow(stock_prices_ts)
+min_window_size <- psy_minw(sample_size)
+min_duration <- psy_ds(sample_size, rule = 1, delta = 1)
+
+# Print the min window size, duration
+print(paste("The sample size -", sample_size, "days"))
+print(paste("The min. window size as per Phillips et al. (2015)- ",min_window_size))
+print(paste("The min. duration as per Phillips et al. (2015) -", min_duration))
+
+# Determine maximum number of lags to consider
+max_lags <- min(floor(sample_size / min_window_size), floor(sample_size / min_duration))
+# Determine optimal lag length using VARselect function
+var_select <- VARselect(stock_prices_ts, lag.max = max_lags, type = "const")
+optimal_lag <- var_select$selection[1]
+
+# Perform Recursive Augmented Dickey-Fuller Test (RADF)
+RADF_test <- radf(stock_prices_ts, minw = min_window_size, lag = optimal_lag)
+mc_critical_values <- radf_mc_cv(sample_size, minw = min_window_size, seed = NULL)
+#mc_distribution <- radf_mc_distr(sample_size, minw = min_window_size, seed = NULL)
+
+# Get results
+summary_results <- summary(RADF_test, mc_critical_values)
+hypothesis_result_GSADF <- diagnostics(RADF_test, cv = mc_critical_values, option = "gsadf")
+hypothesis_result_SADF <- diagnostics(RADF_test, cv = mc_critical_values, option = "sadf")
+datestamp_results <- datestamp(RADF_test, mc_critical_values, option = "gsadf", min_duration = min_duration, sig_lvl = 95)
+
+#Print result
+print(RADF_test)
+print(summary_results)
+print(hypothesis_result_GSADF)
+print(hypothesis_result_SADF)
+
+
+# Loop through each stock and save its datestamp result in a CSV file
+for (stock_name in colnames(stock_prices)[-1]) {
+  
+  # Get the datestamp result for the current stock
+  datestamp_result <- datestamp_results[c(stock_name)]
+  
+  # Set the filename for the CSV file
+  filename <- paste0("datestamp_result_", stock_name, ".csv")
+  
+  # Save the datestamp result for the current stock in a CSV file
+  write.csv(datestamp_result, file = filename, row.names = TRUE)
+}
+
+# Get date of structural break for each stock
+stock_list <- colnames(stock_prices)[-1]
+for (stock in stock_list) {
+  # Define file name for datestamp result
+  file_name <- paste("datestamp_result_", stock, ".csv", sep = "")
+  # Load datestamp results for this stock
+  datestamp_results <- tryCatch(read.csv(file_name), error = function(e) NULL)
+  # Check if datestamp_results is not null
+  if (!is.null(datestamp_results)) {
+  # Modify the datestamp result file to include the date in "YYYY-MM-DD" format
+    start_dates <- as.Date(datestamp_results[[paste0(stock, ".Start")]])
+    peak_dates <- as.Date(datestamp_results[[paste0(stock, ".Peak")]])
+    end_dates <- as.Date(datestamp_results[[paste0(stock, ".End")]])
+    
+    datestamp_results[[paste0(stock, ".Start")]] <- format(as.POSIXct(as.numeric(stock_prices[start_dates,1])*86400, origin = "1970-01-01"), "%Y-%m-%d")
+    datestamp_results[[paste0(stock, ".Peak")]] <- format(stock_prices[peak_dates,1], "%Y-%m-%d")
+    datestamp_results[[paste0(stock, ".End")]] <- format(stock_prices[end_dates,1], "%Y-%m-%d")
+    # Save the modified datestamp result file
+    write.csv(datestamp_results, file = file_name, row.names = FALSE)
+    # Print out the modified datestamp result
+    cat("Modified datestamp result for", stock, ":\n")
+    print(datestamp_results)
+  }
+}
+
+# Get bubble results for each stock
+stock_list <- colnames(stock_prices)[-1]
+bubble_results <- data.frame(Stock = character(), Bubble = character(), stringsAsFactors = FALSE)
+
+for (stock in stock_list) {
+  # Define file name for datestamp result
+  file_name <- paste("datestamp_result_", stock, ".csv", sep = "")
+  
+  # Load datestamp results for this stock
+  datestamp_results <- tryCatch(read.csv(file_name), error = function(e) NULL)
+  
+  # Check if datestamp_results is not null and if the first column has any data
+  if (!is.null(datestamp_results) && nrow(datestamp_results) > 0) {
+    bubble <- "Yes"
+  } else {
+    bubble <- "No"
+  }
+  
+  # Add stock name and bubble result to bubble_results data frame
+  bubble_results <- rbind(bubble_results, data.frame(Stock = stock, Bubble = bubble, stringsAsFactors = FALSE))
+}
+
+# Write bubble_results to CSV file
+write.csv(bubble_results, file = "bubble_result_individual_stock.csv", row.names = FALSE)
+
+
